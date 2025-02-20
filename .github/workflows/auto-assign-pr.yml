@@ -1,0 +1,54 @@
+name: Auto-Assign Reviewers When PR is Ready
+
+on:
+  pull_request:
+    types:
+      - ready_for_review
+
+jobs:
+  assign-reviewers:
+    runs-on: ubuntu-latest
+    env:
+      ORG_ACCESS_TOKEN: ${{ secrets.ORG_ACCESS_TOKEN }}
+
+    steps:
+      - name: Check if PR is ready
+        run: |
+          if [[ "${{ github.event.pull_request.draft }}" == "true" ]]; then
+            echo "PR is in draft mode, skipping reviewer assignment."
+            exit 0
+          fi
+
+      - name: Get all organization members
+        env:
+          ORG_ACCESS_TOKEN: ${{ secrets.ORG_ACCESS_TOKEN }}
+        run: |
+          ORG_NAME="morning-la-tech"
+
+          reviewers=$(curl -s -H "Authorization: token $ORG_ACCESS_TOKEN" \
+            "https://api.github.com/orgs/$ORG_NAME/members" | jq -r '.[].login' | tr '\n' ',' | sed 's/,$//')
+
+          if [[ -z "$reviewers" ]]; then
+            echo "No reviewers found, skipping assignment."
+            exit 0
+          fi
+
+          echo "reviewers=$reviewers" >> $GITHUB_ENV
+
+      - name: Assign reviewers
+        if: env.reviewers != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ORG_ACCESS_TOKEN }}
+          script: |
+            const prAuthor = context.payload.pull_request.user.login;
+            let reviewers = process.env.reviewers.split(',').filter(user => user !== prAuthor);
+
+            if (reviewers.length === 0) return;
+
+            await github.rest.pulls.requestReviewers({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              reviewers: reviewers
+            });
